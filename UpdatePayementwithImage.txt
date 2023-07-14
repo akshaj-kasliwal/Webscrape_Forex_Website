@@ -1,0 +1,67 @@
+brokers_list = soup.find("div", id="brokers-list")
+# Scrape the desired data from the brokers list
+data = []
+broker_elements = brokers_list.find_all("div", class_="brokers-list__card")
+for broker in broker_elements:
+    broker_data ={}
+    payments = broker.find_all("li", class_="brokers-list__payment-item")
+    for payment in payments:
+        try:
+            name_payment = payment.find("div", class_="tooltip__modal").contents[-1].strip()
+            broker_data['Name'] = ( name_payment)
+        except:
+            broker_data['Name'] = re.sub(r'\D', '', name_payment)
+        try:
+            image = payment.find('img')['src']
+            broker_data['Image'] = "www.earnforex.com" +(image)
+        except:
+            broker_data['Image'] = re.sub(r'\D', '', image)
+    data.append(broker_data)
+    
+
+res_list = [i for n, i in enumerate(data)
+            if i not in data[n + 1:]]
+converted_data = []
+for item in res_list:
+    converted_item = {
+        "Name": item["Name"],
+        "Image": [
+            {
+                "url": item["Image"]
+            }
+        ]
+    }
+    converted_data.append(converted_item)
+import requests
+import json
+
+# Airtable configuration
+
+# List of dictionaries with "Name" and "Image" keys
+
+
+# Airtable API endpoint URL
+url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
+
+# Set up headers with the Personal Access Token
+headers = {
+    "Authorization": f"Bearer {AIRTABLE_PAT}",
+    "Content-Type": "application/json"
+}
+
+# Update each record in the Airtable table
+for record in converted_data:
+    payload = {
+        "records": [
+            {
+                "fields": record
+            }
+        ]
+    }
+    json_payload = json.dumps(payload)
+    response = requests.post(url, data=json_payload, headers=headers)
+
+    if response.status_code == 200:
+        print(f"Record updated successfully: {record}")
+    else:
+        print(f"Error updating record: {response.text}")
