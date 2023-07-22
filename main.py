@@ -29,36 +29,17 @@ earnfxurl = 'https://www.earnforex.com'
 
 # Initialize Airtable
 airtable = Airtable(AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, api_key=AIRTABLE_PAT)
+global officeMap
 
 
 # brokers_list =
 
 # Scrape the desired data from the brokers list
-def getMeBrokerList(URL):
-    # Configure Chrome options for headless browsing
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Run Chrome in headless mode
-    print("Getting Data")
-    # Set up Selenium WebDriver
-    driver = webdriver.Chrome(options=chrome_options)  # Replace with the appropriate WebDriver for your OS and browser
-    driver.get(URL)
-    time.sleep(10)  # Adjust the delay as needed
-    # Get the page source after the delay
-    html = driver.page_source
-    # Close the browser
-    driver.quit()
-    print("Getting Data Completed ...")
-    # Parse the HTML with Beautiful Soup
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Find the element containing the brokers list
-    brokers_list = soup.find("div", id="brokers-list")
-    return brokers_list
 
 
 def process_records(mapping, records):
     base_id = AIRTABLE_BASE_ID
-    table_name = PAYMENT_TABLE_NAME
+    table_name = OFFICE_TABLE_NAME
     api_key = AIRTABLE_PAT
     url = f"https://api.airtable.com/v0/{base_id}/{table_name}"
     headers = {
@@ -73,18 +54,27 @@ def process_records(mapping, records):
         if name in mapping:
             record_ids.append(mapping[name])
         else:
+            converted_item = {
+                "Name": name,
+                "Icon": [
+                    {
+                        "url": icon
+                    }
+                ]
+            }
             payload = {
-                "fields": {
-                    "Name": name,
-                    "Icon": icon
-                }
+                "records": [
+                    {
+                        "fields": converted_item
+                    }
+                ]
             }
             response = requests.post(url, headers=headers, data=json.dumps(payload))
             if response.status_code == 200:
                 added_record = response.json().get("records", [{}])[0]
                 added_record_id = added_record.get("id")
                 record_ids.append(added_record_id)
-
+                mapping[name] = added_record_id
     return record_ids
 
 
@@ -95,6 +85,9 @@ def updateExistingRecord(existing_record_id, url, headers, Type_of):
         # Update the existing record
         existing_record = response.json()
         existing_type_of = existing_record["fields"].get("TYPE OF", "")
+        if Type_of in existing_type_of:
+            print("Record Already exists")
+            return
         new_type_of = existing_type_of + ',' + Type_of
         payload = {
             "fields": {
@@ -124,29 +117,21 @@ def checkandUpdateIfexistsAndGoTonext(forxBrokerName, TypeOf):
     return False
 
 
-def get_and_push(URL, TYPEOF):
+def get_and_push(URL, TYPEOF, mapping, sregMap, officemap):
     brokers_list = getMeBrokerList(URL)
     print("All cards from page: " + URL + " fetched")
     data = []
-    mapping = fetch_payment_record_ids()
-    mapping_lev = fetch_maxLev_record_ids()
-    sregMap = fetch_sreg_record_ids()
-    officemap = fetch_office_record_ids()
-    platformmpa = fetch_platform_record_ids()
-    regultionmap = fetch_regulation_record_ids()
-    # currencymap = fetch_currency_record_ids()
 
     broker_elements = brokers_list.find_all("div", class_="brokers-list__card")
     for broker in broker_elements:
+
         broker_data = {}
         name = broker.find("a", class_="brokers-list__broker-name").get_text(strip=True)
         broker_data['TYPE OF'] = TYPEOF
         broker_data['FOREX BROKER / SUBBROKER'] = name
         if checkandUpdateIfexistsAndGoTonext(name, TYPEOF):
             continue
-        # Zero
-        # broker_data[''] = typeOfMapping()
-        # One
+
         try:
             account_size = broker.find("div", class_="brokers-list__col").contents[-1].strip()
             broker_data['MIN. ACCOUNT SIZE'] = re.sub(r'\D', '', account_size)
@@ -186,10 +171,10 @@ def get_and_push(URL, TYPEOF):
 
         # Six
         try:
-            broker_data['MAX. LEVERAGE'] = []
+            # broker_data['MAX. LEVERAGE'] = []
             div = broker.find("div", title="Max. Leverage")
             max_leverage = div.contents[-1].strip()
-            broker_data['MAX. LEVERAGE'].append(mapping_lev.get(max_leverage))
+            broker_data['MAX. LEVERAGE'] = max_leverage
         except:
 
             # print("Payment type error: " + broker_data['MAX. LEVERAGE'])
@@ -221,14 +206,17 @@ def get_and_push(URL, TYPEOF):
 
             # Nine
             plusOrMinus = ''
-        div = broker.find("div", title='US').find("div", class_="brokers-list__plus")
-        if div:
-            plusOrMinus = 'Yes'
-        else:
-            plusOrMinus = 'No'
-        broker_data['US'] = plusOrMinus
+        try:
+            div = broker.find("div", title='US').find("div", class_="brokers-list__plus")
+            if div:
+                plusOrMinus = 'Yes'
+            else:
+                plusOrMinus = 'No'
+            broker_data['US'] = plusOrMinus
+        except:
+            broker_data['US'] = ''
 
-        # ten
+            # ten
         try:
             div = broker.find("div", title="Platforms").find_all('div')
             platform = ''
@@ -263,15 +251,14 @@ def get_and_push(URL, TYPEOF):
             div = broker.find("div", title="Regulation").find_all('div')
             # regulations = []
             for d in div:
-                regu = {}
                 regulation = d.get_text(strip=True)
                 if not "Regulation" in regulation:
                     if regulations == '':
                         regulations = regulation
                         continue
                     regulations = regulation + ',' + regulations
-
-            broker_data['REGULATION'] = regulations
+            if len(regulations) > 0:
+                broker_data['REGULATION'] = regulations
         except:
             broker_data['REGULATION'] = []
         # Store the scraped data in Airtable
@@ -317,9 +304,14 @@ def get_and_push(URL, TYPEOF):
         }
         # Check if already exists :
         existing_record_id = check_duplicate(item['FOREX BROKER / SUBBROKER'])
+        if item['FOREX BROKER / SUBBROKER'].upper().__contains__("Trader's Way"):
+            print("Check Trader's way")
         if existing_record_id:
-            updateExistingRecord(existing_record_id, url, headers)
-            continue
+            try:
+                updateExistingRecord(existing_record_id, url, headers)
+                continue
+            except:
+                continue
 
         # Go ahead normally
         payload = {
@@ -354,7 +346,8 @@ def getCardElementfromname(soup_child, cardType):
     print(f'Card Type {cardType} not found')
     return None
 
-#ChildFun
+
+# ChildFun
 
 def getFromChild_(childUrl):
     str_pair = ''
@@ -397,17 +390,11 @@ def getFromChild_(childUrl):
         except:
             print("Error fetching description from : " + childUrl)
             description = ''
+
+        # OfficesIn
         try:
             OfficesIn_elements = getCardElementfromname(soup_child, "Offices in").find_all('div',
                                                                                            class_='broker-card__col')
-            Regulations_elements = getCardElementfromname(soup_child, "Regulated by").find_all('div',
-                                                                                               class_='broker-card__col-text --bold')
-            WebLanguage_elements = getCardElementfromname(soup_child, "Website available in").find_all('div',
-                                                                                                       class_='broker-card__col-text --bold')
-        except:
-            print("Error fetching OfficesIn_elements Or Regulations_elements Or WebLanguage_elements from " + childUrl)
-        # OfficesIn
-        try:
             for element in OfficesIn_elements:
                 office_dict = {}
                 image = element.find('img')['src']
@@ -420,6 +407,8 @@ def getFromChild_(childUrl):
 
         # Regulations
         try:
+            Regulations_elements = getCardElementfromname(soup_child, "Regulated by").find_all('div',
+                                                                                               class_='broker-card__col-text --bold')
             for element in Regulations_elements:
                 regulation = element.get_text(strip=True)
                 if Regulations == '':
@@ -431,6 +420,8 @@ def getFromChild_(childUrl):
 
         # WebLanguage
         try:
+            WebLanguage_elements = getCardElementfromname(soup_child, "Website available in").find_all('div',
+                                                                                                       class_='broker-card__col-text --bold')
             for element in WebLanguage_elements:
                 language = element.get_text(strip=True)
                 if WebLanguage == '':
@@ -647,12 +638,40 @@ def getBrokerTypeMappingAndLinks():
     return main_map
 
 
+def getMeBrokerList(URL):
+    # Configure Chrome options for headless browsing
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # Run Chrome in headless mode
+    print("Getting Data")
+    # Set up Selenium WebDriver
+    driver = webdriver.Chrome(options=chrome_options)  # Replace with the appropriate WebDriver for your OS and browser
+    driver.get(URL)
+    time.sleep(15)  # Adjust the delay as needed
+    # Get the page source after the delay
+    html = driver.page_source
+    # Close the browser
+    driver.quit()
+    print("Getting Data Completed ...")
+    # Parse the HTML with Beautiful Soup
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Find the element containing the brokers list
+    brokers_list = soup.find("div", id="brokers-list")
+    return brokers_list
+
+
 if __name__ == '__main__':
     allLinks = []
     allLinks = getBrokerTypeMappingAndLinks()
-    allLinks = allLinks[6:20]
+    i = 0
+    j = 31
+    mapping = fetch_payment_record_ids()
+    sregMap = fetch_sreg_record_ids()
+    officemap = fetch_office_record_ids()
+    allLinks = allLinks[i:j]
     i = 1
     for links in allLinks:
-        if i == 2:
-            print()
-        get_and_push(links['Link'], links['TypeOf'])
+        print(
+            f'******************************************Progress {i}/30   *******************************************')
+        get_and_push(links['Link'], links['TypeOf'], mapping, sregMap, officemap)
+        i = i + 1
